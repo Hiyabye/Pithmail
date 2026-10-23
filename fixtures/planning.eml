@@ -1,0 +1,25 @@
+From: Mina Park <mina@example.test>
+To: Jihoon <jihoon@example.test>
+Subject: Project review on Friday
+Date: Thu, 22 Oct 2026 09:00:00 +0900
+Message-ID: <planning-1@example.test>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="pithmail-fixture"
+
+--pithmail-fixture
+Content-Type: text/plain; charset=utf-8
+
+Hi Jihoon,
+
+Please review the offline search proposal before Friday's meeting.
+The meeting is at 14:00 in room 301. Bring your notes on SQLite.
+
+Thanks,
+Mina
+--pithmail-fixture
+Content-Type: text/plain; name="agenda.txt"
+Content-Disposition: attachment; filename="agenda.txt"
+Content-Transfer-Encoding: base64
+
+MS4gT2ZmbGluZSBzZWFyY2gKMi4gUHJpdmFjeQo=
+--pithmail-fixture--

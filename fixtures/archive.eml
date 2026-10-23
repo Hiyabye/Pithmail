@@ -1,0 +1,9 @@
+From: Library <library@example.test>
+To: Jihoon <jihoon@example.test>
+Subject: Your library receipt
+Date: Wed, 21 Oct 2026 08:00:00 +0900
+Message-ID: <library@example.test>
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<html><body><h1>Library renewal</h1><p>Your book has been renewed. Keep this archived receipt for your records.</p><img src="https://tracker.invalid/pixel"><script>fetch('https://attacker.invalid')</script><a href="javascript:alert(1)">Untrusted link</a></body></html>
