@@ -7,11 +7,13 @@ use crate::{
     mail::{self, FixtureProvider, MailProvider},
 };
 
-const DB_ERROR: &str = "Local fixture storage failed. Restart the app; if the problem persists, reset the disposable fixture database.";
+const DB_ERROR: &str =
+    "Local mail storage failed. Retry or restart Pithmail. Keep your database and OS credentials.";
 const SUMMARY_COLUMNS: &str = "m.id, m.thread_id, m.subject, m.sender, m.received_at, m.snippet";
 
 pub struct Store {
-    connection: Connection,
+    pub(crate) connection: Connection,
+    pub(crate) is_gmail: bool,
 }
 
 impl Store {
@@ -56,10 +58,16 @@ impl Store {
         connection
             .execute_batch("PRAGMA journal_mode = WAL;")
             .map_err(|_| DB_ERROR.to_string())?;
-        Ok(Self { connection })
+        Ok(Self {
+            connection,
+            is_gmail: false,
+        })
     }
 
     pub fn initialize_fixtures(&mut self) -> Result<(), String> {
+        if self.is_gmail {
+            return Err("Fixture import cannot modify real-mail storage.".into());
+        }
         let tx = self
             .connection
             .transaction()
@@ -115,6 +123,23 @@ impl Store {
     }
 
     pub fn list_messages(&self, query: &str) -> Result<Vec<MessageSummary>, String> {
+        self.list_messages_range(query, 200, 0)
+    }
+
+    pub fn list_messages_page(
+        &self,
+        query: &str,
+        offset: u32,
+    ) -> Result<Vec<MessageSummary>, String> {
+        self.list_messages_range(query, 100, offset)
+    }
+
+    fn list_messages_range(
+        &self,
+        query: &str,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<MessageSummary>, String> {
         if query.chars().count() > 512 {
             return Err("Search must be at most 512 characters".into());
         }
@@ -126,7 +151,7 @@ impl Store {
             if !query.trim().is_empty() {
                 return Ok(Vec::new());
             }
-            return self.summaries(&format!("SELECT {SUMMARY_COLUMNS} FROM messages m ORDER BY m.received_at DESC,m.id LIMIT 200"), &[]);
+            return self.summaries(&format!("SELECT {SUMMARY_COLUMNS} FROM messages m ORDER BY m.received_at DESC,m.id LIMIT ?1 OFFSET ?2"), &[&limit,&offset]);
         }
         // Treat search as literal words, never as FTS operators or SQL.
         let expression = tokens
@@ -134,7 +159,7 @@ impl Store {
             .map(|token| format!("\"{token}\"*"))
             .collect::<Vec<_>>()
             .join(" AND ");
-        self.summaries(&format!("SELECT {SUMMARY_COLUMNS} FROM messages m JOIN messages_fts f ON f.rowid=m.rowid WHERE messages_fts MATCH ?1 ORDER BY rank,m.received_at DESC,m.id LIMIT 200"), &[&expression])
+        self.summaries(&format!("SELECT {SUMMARY_COLUMNS} FROM messages m JOIN messages_fts f ON f.rowid=m.rowid WHERE messages_fts MATCH ?1 ORDER BY rank,m.received_at DESC,m.id LIMIT ?2 OFFSET ?3"), &[&expression,&limit,&offset])
     }
 
     pub fn message(&self, id: &str) -> Result<MessageDetail, String> {
@@ -152,7 +177,15 @@ impl Store {
                 row.get(0)
             })
             .map_err(|_| DB_ERROR.to_string())?;
-        let mut stmt = self.connection.prepare("SELECT name,length(content) FROM attachments WHERE message_id=?1 ORDER BY part_index").map_err(|_| DB_ERROR.to_string())?;
+        let attachment_sql = if self.is_gmail {
+            "SELECT name,expected_size FROM attachments WHERE message_id=?1 ORDER BY part_index"
+        } else {
+            "SELECT name,length(content) FROM attachments WHERE message_id=?1 ORDER BY part_index"
+        };
+        let mut stmt = self
+            .connection
+            .prepare(attachment_sql)
+            .map_err(|_| DB_ERROR.to_string())?;
         let attachments = stmt
             .query_map([id], |row| {
                 Ok(AttachmentInfo {
@@ -171,12 +204,25 @@ impl Store {
     }
 
     pub fn thread(&self, id: &str) -> Result<Vec<MessageDetail>, String> {
+        self.thread_range(id, 200, 0)
+    }
+
+    pub fn thread_page(&self, id: &str, offset: u32) -> Result<Vec<MessageDetail>, String> {
+        self.thread_range(id, 100, offset)
+    }
+
+    fn thread_range(
+        &self,
+        id: &str,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<MessageDetail>, String> {
         let mut stmt = self
             .connection
-            .prepare("SELECT id FROM messages WHERE thread_id=?1 ORDER BY received_at,id LIMIT 200")
+            .prepare("SELECT id FROM messages WHERE thread_id=?1 ORDER BY received_at,id LIMIT ?2 OFFSET ?3")
             .map_err(|_| DB_ERROR.to_string())?;
         let ids = stmt
-            .query_map([id], |row| row.get::<_, String>(0))
+            .query_map(params![id, limit, offset], |row| row.get::<_, String>(0))
             .map_err(|_| DB_ERROR.to_string())?
             .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(|_| DB_ERROR.to_string())?;
@@ -244,9 +290,11 @@ impl Store {
         for message in &mut messages {
             let mut labels = self
                 .connection
-                .prepare(
-                    "SELECT label_id FROM message_labels WHERE message_id=?1 ORDER BY label_id",
-                )
+                .prepare(if self.is_gmail {
+                    "SELECT COALESCE(json_extract(p.json,'$.name'),l.label_id) FROM message_labels l LEFT JOIN provider_labels p ON p.label_id=l.label_id WHERE l.message_id=?1 ORDER BY l.label_id"
+                } else {
+                    "SELECT label_id FROM message_labels WHERE message_id=?1 ORDER BY label_id"
+                })
                 .map_err(|_| DB_ERROR.to_string())?;
             message.labels = labels
                 .query_map([&message.id], |row| row.get(0))
@@ -265,6 +313,12 @@ impl Store {
         Ok(messages)
     }
 }
+
+#[path = "storage_gmail.rs"]
+mod gmail;
+#[cfg(test)]
+#[path = "storage_gmail_tests.rs"]
+mod gmail_tests;
 
 #[cfg(test)]
 #[path = "tests.rs"]

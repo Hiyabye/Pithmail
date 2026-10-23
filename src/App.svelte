@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import MessageList from './lib/MessageList.svelte';
   import MessageReader from './lib/MessageReader.svelte';
+  import SyncStatus from './lib/SyncStatus.svelte';
   import { MailboxViewModel, type View } from './lib/mailbox.svelte';
   import type { Theme } from './lib/api';
 
@@ -18,6 +19,7 @@
 
   onMount(() => {
     void mailbox.initialize();
+    return () => mailbox.dispose();
   });
 </script>
 
@@ -44,8 +46,10 @@
     </nav>
     <div class="sidebar-footer">
       <span class="status-dot"></span><span
-        >Local fixture mailbox<br /><span class="muted"
-          >No account connected</span
+        >{mailbox.connection.mode === 'gmail'
+          ? 'Encrypted local mailbox'
+          : 'Local fixture mailbox'}<br /><span class="muted"
+          >{mailbox.connection.email ?? 'No Gmail mailbox opened'}</span
         ></span
       >
     </div>
@@ -73,8 +77,29 @@
           onclick={() => {
             void mailbox.retry();
           }}
-          disabled={mailbox.loading || mailbox.reading || mailbox.searching}
-          >Retry</button
+          disabled={mailbox.loading ||
+            mailbox.reading ||
+            mailbox.searching ||
+            mailbox.connectionBusy}>Retry</button
+        >
+      </div>
+    {/if}
+
+    {#if mailbox.connection.mode === 'gmail' && mailbox.connection.sync && mailbox.view !== 'Settings'}
+      <div class="sync-strip" role="status">
+        <span
+          >{mailbox.connection.sync.paused
+            ? 'Download paused'
+            : mailbox.connection.sync.complete
+              ? 'Mailbox synchronized'
+              : `Download: ${mailbox.connection.sync.phase}`} · {mailbox
+            .connection.sync.downloaded} messages stored{mailbox.connection.sync
+            .error
+            ? ' · Attention needed'
+            : ''}</span
+        >
+        <button class="text-button" onclick={() => mailbox.navigate('Settings')}
+          >Sync settings</button
         >
       </div>
     {/if}
@@ -100,39 +125,146 @@
           {#if mailbox.saving}<p role="status">Saving theme…</p>{/if}
         </section>
         <section class="settings-section">
+          <h2>Gmail connection</h2>
+          <p class="muted">
+            One personal Gmail account, read-only. Connecting opens your system
+            browser. Your tokens stay in the OS credential store.
+          </p>
+          {#if mailbox.connection.email}<p class="account-address">
+              {mailbox.connection.email}
+            </p>{/if}
+          {#if mailbox.connection.error}<p class="sync-error" role="alert">
+              {mailbox.connection.error}
+            </p>{/if}
+          <div class="button-row">
+            {#if mailbox.connection.mode === 'fixture'}
+              <button
+                id="open-gmail"
+                disabled={!mailbox.ready ||
+                  mailbox.connectionBusy ||
+                  mailbox.connection.busy}
+                onclick={() => {
+                  void mailbox.openGmail();
+                }}>Open encrypted Gmail mailbox</button
+              >
+            {/if}
+            <button
+              id="connect-gmail"
+              disabled={!mailbox.ready ||
+                mailbox.connectionBusy ||
+                mailbox.connection.busy ||
+                !mailbox.connection.oauthConfigured}
+              onclick={() => {
+                void mailbox.connectGmail();
+              }}>Connect / reconnect Gmail</button
+            >
+            {#if mailbox.loggingIn}
+              <button
+                onclick={() => {
+                  void mailbox.cancelLogin();
+                }}>Cancel sign-in</button
+              >
+            {/if}
+          </div>
+          {#if mailbox.connectionBusy}<p role="status">
+              {mailbox.loggingIn
+                ? 'Waiting for sign-in in your browser…'
+                : 'Opening the local mailbox…'}
+            </p>{/if}
+          <p class="muted">
+            Opening stored mail works offline and does not contact Google.
+            Startup uses fixtures until you explicitly unlock Gmail; restarting
+            returns to fixtures. Use Sync now to request network
+            synchronization.
+          </p>
+          <details class="oauth-help">
+            <summary
+              >Local OAuth setup{mailbox.connection.oauthConfigured
+                ? ' · configured'
+                : ' · needed to connect'}</summary
+            >
+            <p class="muted">
+              Enable Gmail API in your Google Cloud project and create a Desktop
+              app OAuth client. Keep its downloaded JSON outside this repository
+              in an owner-only file (permissions 0600). Set <code
+                >PITHMAIL_OAUTH_CONFIG</code
+              > to its path before launching Pithmail. Add your account as a test
+              user if needed. Never paste credentials into source files.
+            </p>
+            <p class="muted">
+              Google applications in Testing mode can require reconnection after
+              seven days. This is separate from your offline encrypted mail.
+            </p>
+          </details>
+          {#if mailbox.connection.sync}
+            <SyncStatus
+              status={mailbox.connection.sync}
+              busy={mailbox.connectionBusy || mailbox.connection.busy}
+              onstart={() => {
+                void mailbox.startSync();
+              }}
+              onpause={() => {
+                void mailbox.pauseSync();
+              }}
+            />
+          {:else if mailbox.connection.mode === 'gmail'}
+            <button
+              disabled={mailbox.connectionBusy}
+              onclick={() => {
+                void mailbox.startSync();
+              }}>Sync now</button
+            >
+          {/if}
+        </section>
+        <section class="settings-section">
           <h2>Mailbox & privacy</h2>
           <dl class="settings-facts">
             <div>
               <dt>Source</dt>
-              <dd>Synthetic fixture emails only</dd>
+              <dd>
+                {mailbox.connection.mode === 'gmail'
+                  ? 'Gmail · read-only local copy'
+                  : 'Synthetic fixture emails only'}
+              </dd>
             </div>
             <div>
               <dt>Storage</dt>
-              <dd>Local, disposable SQLite database</dd>
+              <dd>
+                {mailbox.connection.mode === 'gmail'
+                  ? 'Local SQLCipher database, separate from fixtures'
+                  : 'Local, disposable SQLite database'}
+              </dd>
             </div>
             <div>
               <dt>Encryption</dt>
               <dd>
-                Not enabled for synthetic data. Real mail import is unavailable.
+                {mailbox.connection.mode === 'gmail'
+                  ? 'Mail, attachments, and search indexes are encrypted. The key stays in the OS credential store; no plaintext fallback.'
+                  : 'Not enabled for synthetic data. Gmail uses a separate encrypted database.'}
               </dd>
             </div>
             <div>
               <dt>Network</dt>
-              <dd>No mail, model, telemetry, or analytics requests</dd>
+              <dd>
+                Only explicit Gmail sign-in/synchronization; no remote AI,
+                telemetry, or analytics
+              </dd>
             </div>
           </dl>
           <p class="muted">
-            This development mailbox is separate from future encrypted real-mail
-            storage. Messages render as text; remote images and active HTML are
-            never loaded.
+            Messages render as text; remote images and active HTML are never
+            loaded. Confirmed remote deletions remove the local message and
+            attachments on synchronization. Gmail Spam and Trash remain
+            available locally but are excluded from Today. Losing the encryption
+            key requires downloading the mailbox again.
           </p>
         </section>
         <section class="settings-section">
           <h2>Coming in later milestones</h2>
           <p class="muted">
-            Gmail connection and synchronization, local llama.cpp analysis,
-            installed models, per-task model assignments, and energy profiles
-            are not implemented yet. Reading and search do not require AI.
+            Local llama.cpp analysis, installed models, per-task model
+            assignments, and energy profiles are not implemented yet. Reading
+            and search do not require AI.
           </p>
         </section>
       </div>
@@ -187,6 +319,17 @@
               onselect={openMessage}
               empty={mailbox.loading ? 'Loading…' : 'No local messages.'}
             />
+            {#if mailbox.inboxHasMore}<div class="load-more">
+                <button
+                  disabled={mailbox.loadingMore}
+                  onclick={() => {
+                    void mailbox.loadMore(false);
+                  }}
+                  >{mailbox.loadingMore
+                    ? 'Loading…'
+                    : 'Load more messages'}</button
+                >
+              </div>{/if}
           {:else}
             <form
               class="search-form"
@@ -227,12 +370,28 @@
                 ? 'No matching local messages. Try another keyword.'
                 : 'Search your downloaded messages above.'}
             />
+            {#if mailbox.searchHasMore}<div class="load-more">
+                <button
+                  disabled={mailbox.loadingMore || mailbox.searching}
+                  onclick={() => {
+                    void mailbox.loadMore(true);
+                  }}
+                  >{mailbox.loadingMore
+                    ? 'Loading…'
+                    : 'Load more results'}</button
+                >
+              </div>{/if}
           {/if}
         </section>
         <MessageReader
           detail={mailbox.detail}
           thread={mailbox.thread}
           loading={mailbox.reading}
+          hasMore={mailbox.threadHasMore}
+          loadingMore={mailbox.loadingThread}
+          onmore={() => {
+            void mailbox.loadMoreThread();
+          }}
           onselect={openMessage}
           onclose={() => mailbox.closeMessage()}
         />

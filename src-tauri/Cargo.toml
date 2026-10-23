@@ -13,7 +13,22 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
-tokio = { version = "1", features = ["rt-multi-thread"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "time", "sync", "macros"] }
 serde = { version = "1", features = ["derive"] }
-rusqlite = { version = "0.40", features = ["bundled"] }
-mail-parser = "0.11"
+rusqlite = { version = "0.40", features = ["bundled-sqlcipher-vendored-openssl"] }
+mail-parser = { version = "0.11", features = ["full_encoding"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "form"] }
+oauth2 = { version = "5", default-features = false }
+keyring-core = "1"
+zeroize = "1"
+getrandom = "0.4"
+base64 = "0.22"
+serde_json = "1"
+open = "5"
+httpdate = "1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+apple-native-keyring-store = { version = "1", features = ["keychain"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+dbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust"] }

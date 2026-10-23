@@ -2,25 +2,28 @@
 
 ## Scope and invariants
 
-Current scope is Milestone A: an offline synthetic mailbox, not Gmail or AI integration. See `docs/architecture.md` for boundaries, decisions, status, and later-milestone security gates. Do not add placeholder commands/modules for later milestones.
+Current implementation covers A and B, with live Google acceptance pending. `docs/architecture.md` is the source of truth for decisions, limitations, schema, and validation status. Do not expand into AI until B acceptance is explicitly settled.
 
-- Keep frontend presentation/state in Svelte + strict TypeScript; all mail/storage business rules belong in Rust.
-- Never use real mail in the fixture database. `accounts.provider` is deliberately constrained to `fixture`; do not relax this to implement Gmail. Real-mail storage needs separately approved encryption/key management first.
-- Never render received content with `@html`; no frontend networking, external assets, telemetry, or cloud inference.
-- Keep email bodies, prompts, tokens, and summaries out of logs.
+- Svelte/strict TypeScript owns presentation; Rust owns mail/storage/auth/sync logic. No frontend HTTP, database, tokens or direct providers.
+- Keep disposable fixtures separate from encrypted Gmail. Never relax the fixture provider CHECK to import real mail. Real data, original provider JSON, parts, search and sync checkpoints all belong inside SQLCipher.
+- No native credential fallback or automatic lost-key replacement. Acquire/hold the cross-process mailbox lock before first key provisioning.
+- Never use `@html` for received/model content. No remote images, telemetry, cloud inference, or mail/prompts/tokens/summaries in logs.
+- OAuth transitions and sync steps must share the transition gate. Pause before reconnect, wait for the in-flight response/commit, and reverify account identity on explicit resume.
+- Completion requires every queued message and required part accounted for. Incomplete listing/attachment 404 cannot justify deleting a message. Authoritative remote deletion must remove local dependent content/search.
 
 ## Layout
 
-- `src/`: Svelte UI, `lib/mailbox.svelte.ts` ViewModel, `lib/api.ts` typed IPC.
-- `src-tauri/`: single Rust crate; `domain`, `mail`, `storage`, `commands`; debug-only `smoke` runner.
-- `src-tauri/migrations/`: ordered SQL migrations, tracked through SQLite `user_version`.
-- `fixtures/`: compiled-in synthetic MIME; stable provider IDs and labels are in `mail.rs`.
-- `tests/native-smoke.js`: actual native WebView UI driver; no browser/mock fallback.
-- `assets/icon.svg`: source for `src-tauri/icons/icon.png`.
+- `src/`: views/components, `lib/mailbox.svelte.ts` ViewModel, `lib/api.ts` typed IPC, `lib/SyncStatus.svelte` progress.
+- `src-tauri/`: one crate. `provider` contracts; `mail` fixture parser/provider; `gmail_mime` FULL normalization; `storage`/`storage_gmail`; `security`, `auth`, `network`, `gmail`, `sync`, `commands`.
+- `src-tauri/migrations/`: fixture version 1; encrypted initial version 2 and idempotent sync schema. Add versioned migrations for changes to deployed data; do not edit schemas in place after release.
+- `fixtures/`: compiled-in synthetic MIME only.
+- `*_tests.rs` and inline Rust tests: synthetic/local mock boundaries, no real Google/native vault by default.
+- `tests/native-{smoke,gmail-smoke}.js`: actual native WebView drivers for fixtures/encrypted synthetic Gmail.
+- `assets/icon.svg`: source of `src-tauri/icons/icon.png`.
 
-## Tooling
+## Setup and commands
 
-Use npm and the committed `package-lock.json`; Rust stable with rustfmt/Clippy and `src-tauri/Cargo.lock`. Install platform prerequisites from the official Tauri documentation linked in README. Do not introduce SvelteKit, an additional Rust workspace, or state/UI frameworks without a concrete approved reason.
+Use npm plus committed `package-lock.json`, Rust stable/rustfmt/Clippy plus `src-tauri/Cargo.lock`. `File::try_lock` and Linux credential store require a sufficiently recent Rust; use current stable. Node 24+ is required. Platform prerequisites: official Tauri link in README; SQLCipher/vendored OpenSSL requires a C build toolchain and Perl; Linux needs D-Bus development files, pkg-config, and a real unlocked Secret Service for manual credential validation. No Linux setup has been validated on this Mac.
 
 ```sh
 npm ci
@@ -34,16 +37,21 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path src-tauri/Cargo.toml
 npm run tauri -- build --debug --no-bundle
 PITHMAIL_SMOKE_TEST=1 src-tauri/target/debug/pithmail
+PITHMAIL_SMOKE_TEST=gmail src-tauri/target/debug/pithmail
 ```
 
-The final command launches a real native WebView, exercises all four views, and exits with a pass/fail status. It requires a graphical session. Smoke mode exists only in debug builds and uses a fresh temporary fixture database, not the normal application database. Never claim cross-platform validation from the macOS smoke run.
+Both smoke modes need a graphical session, use temporary synthetic databases, exit pass/fail, and exist only in debug builds. Encrypted mode bypasses OS credentials with a temporary random synthetic key; it is not evidence of live authentication. Neither mode contacts Google or touches normal mailbox files. Ordinary Rust tests use local TCP mocks and in-memory credential mocks. The ignored `native_credential_roundtrip` test writes/reads/deletes one uniquely named native diagnostic entry; run it only with explicit authorization, never as part of a generic `--include-ignored` test command.
 
-`cargo build` alone does not replace the Tauri build command for embedded frontend validation: Tauri CLI builds with the custom protocol and production assets. `npm run dev` alone is only a browser preview and intentionally cannot access mail.
+Tauri CLI build is required to validate embedded production assets/custom protocol. `cargo build` alone is insufficient for that check; `npm run dev` alone is a browser preview that intentionally cannot access mail. Release bundling/signing is disabled.
 
-## Conventions and contracts
+## Development contracts
 
-Rust domain objects serialize camelCase; keep `src/lib/api.ts` synchronized with `domain.rs` and Tauri command signatures. Command failures return content-free, actionable strings. Database and MIME operations must stay on the blocking pool, never on the UI thread. SQL parameters must be bound; search accepts literal prefix words, not raw FTS expressions.
+Rust objects serialize camelCase; synchronize `api.ts` with domain/command/status contracts. Keep errors content-free and actionable. Use parameterized SQL and literal prefix-word search, not raw FTS input. All DB/MIME work remains on the blocking pool; never hold the database mutex across HTTP.
 
-Use meaningful tests at boundaries: database reopen/constraints, MIME bytes, FTS consistency, and actual UI/IPC. Include a failing reproduction for regressions where practical. Generated `src-tauri/gen`, build outputs, local config, databases, and model weights do not belong in Git.
+`Network` is the sole application HTTP boundary. Keep release origins fixed, redirects/proxies disabled, and bounds/timeouts enforced. Test endpoint overrides must stay `cfg(test)` and loopback-only. Preserve typed auth/provider errors so token-endpoint outages participate in durable retry rather than forcing consent.
 
-README is usage-facing; development guidance belongs here. Keep implementation decisions and limitations accurate in `docs/architecture.md`.
+Preserve original Gmail FULL response bytes separately from normalized text; reconstructed MIME is only parser input. Do not claim exact `.eml` preservation. Attachment metadata may precede content; the UI must not describe pending attachments as downloaded.
+
+Config setup and usage belong in README. OAuth JSON must be an owner-only regular file outside Git; pass only its path using `PITHMAIL_OAUTH_CONFIG`. Do not automatically connect a real account, open consent, run native vault tests, or start a real full download during automated development validation. Obtain specific approval first.
+
+Use tests that exercise real boundaries: encrypted reopen/constraints, provider-shaped MIME, local HTTP errors, replay/checkpoints, deletion/part accounting, pause/retry timing and auth-transition concurrency, plus actual UI/IPC. Keep Linux, live Google and performance/energy claims explicitly unverified until measured there. Generated `src-tauri/gen`, targets, local config, mail databases and model weights do not belong in Git.

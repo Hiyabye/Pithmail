@@ -5,12 +5,18 @@
     detail,
     thread,
     loading,
+    hasMore,
+    loadingMore,
+    onmore,
     onselect,
     onclose,
   }: {
     detail: MessageDetail | null;
     thread: MessageDetail[];
     loading: boolean;
+    hasMore: boolean;
+    loadingMore: boolean;
+    onmore: () => void;
     onselect: (id: string) => void;
     onclose: () => void;
   } = $props();
@@ -39,14 +45,16 @@
         <p class="message-labels">{detail.message.labels.join(' · ')}</p>
       </header>
       <div class="mail-body" dir="auto">
-        {detail.body || '(This message has no text body.)'}
+        {detail.body ||
+          '(No readable text is available yet. If synchronization is in progress, this body may still be downloading.)'}
       </div>
       {#if detail.attachments.length > 0}
         <section class="attachments" aria-label="Attachments">
           <h3>Attachments</h3>
           <p class="muted">
-            Stored locally. Opening and exporting attachments is not available
-            in this milestone.
+            Attachment metadata is available before downloads finish. Check sync
+            settings for pending downloads. Opening and exporting attachments is
+            not available in this milestone.
           </p>
           <ul>
             {#each detail.attachments as attachment, index (`${attachment.name}-${index}`)}
@@ -60,7 +68,7 @@
         </section>
       {/if}
     </article>
-    {#if thread.length > 1}
+    {#if thread.length > 1 || hasMore}
       <nav class="thread-nav" aria-label="Messages in this thread">
         <h3>This conversation <span class="muted">({thread.length})</span></h3>
         {#each thread as item (item.message.id)}
@@ -76,6 +84,11 @@
             >
           </button>
         {/each}
+        {#if hasMore}<button disabled={loadingMore} onclick={onmore}
+            >{loadingMore
+              ? 'Loading conversation…'
+              : 'Load more conversation messages'}</button
+          >{/if}
       </nav>
     {/if}
   {:else}

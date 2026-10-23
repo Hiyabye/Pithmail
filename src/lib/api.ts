@@ -28,6 +28,27 @@ export interface Overview {
   recent: MessageSummary[];
 }
 
+export interface SyncStatus {
+  phase: string;
+  paused: boolean;
+  discovered: number;
+  downloaded: number;
+  pendingBodies: number;
+  pendingAttachments: number;
+  error: string | null;
+  complete: boolean;
+  nextRetryAt: number | null;
+}
+
+export interface ConnectionStatus {
+  mode: 'fixture' | 'gmail';
+  email: string | null;
+  oauthConfigured: boolean;
+  busy: boolean;
+  error: string | null;
+  sync: SyncStatus | null;
+}
+
 export type Theme = 'system' | 'light' | 'dark';
 export interface Settings {
   theme: Theme;
@@ -47,6 +68,16 @@ function command<T>(name: string, args?: Record<string, unknown>): Promise<T> {
 export const api = {
   listMessages: (query = '') =>
     command<MessageSummary[]>('list_messages', { query }),
+  listMessagesPage: (query = '', offset = 0) =>
+    command<MessageSummary[]>('list_messages_page', { query, offset }),
+  threadPage: (id: string, offset = 0) =>
+    command<MessageDetail[]>('get_thread_page', { id, offset }),
+  connection: () => command<ConnectionStatus>('get_connection'),
+  openGmail: () => command<ConnectionStatus>('open_gmail'),
+  connectGmail: () => command<ConnectionStatus>('connect_gmail'),
+  cancelLogin: () => command<void>('cancel_login'),
+  startSync: () => command<ConnectionStatus>('start_sync'),
+  pauseSync: () => command<ConnectionStatus>('pause_sync'),
   message: (id: string) => command<MessageDetail>('get_message', { id }),
   thread: (id: string) => command<MessageDetail[]>('get_thread', { id }),
   overview: () => command<Overview>('get_overview'),
