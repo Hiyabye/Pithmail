@@ -2,7 +2,7 @@
 
 A private, local-first desktop email reader. Read and search locally stored mail without AI or a cloud backend.
 
-**Current status: Milestone B implementation, validated with synthetic mail and mocked Gmail/OAuth.** Real Google consent and mailbox synchronization have not yet been tested. Local AI is a later milestone.
+**Current status: Milestone B implementation, validated with synthetic mail, mocked Gmail/OAuth, and a bounded live retrieval.** Browser sign-in succeeded and one real message was saved and reopened from encrypted storage. Full-mailbox synchronization remains unvalidated. Local AI is a later milestone.
 
 ## Run
 
@@ -29,7 +29,7 @@ Active HTML, remote images, and clickable email links are not rendered. Emails b
 
 ## Connect your personal Gmail account
 
-**Live Gmail is not yet validated.** Keep this limitation in mind before downloading a large mailbox. Never paste OAuth credentials or tokens into chat or commit them to Git.
+**Live validation is limited to sign-in and one message.** Full synchronization, external attachment retrieval, and incremental updates still need real-mail validation. Keep this limitation in mind before downloading a large mailbox. Never paste OAuth credentials or tokens into chat or commit them to Git.
 
 1. In your own [Google Cloud project](https://developers.google.com/workspace/gmail/api/quickstart/python), enable the Gmail API and configure the OAuth consent screen. For an External app in Testing, add your Gmail address as a test user.
 2. Create an OAuth client of type **Desktop app**, then download its JSON. Pithmail requests only `gmail.readonly`; do not configure sending or modification scopes.
@@ -64,6 +64,6 @@ Gmail FULL JSON—not exact original `.eml` bytes—is preserved. Remote label c
 
 Application HTTP is restricted to Gmail retrieval and Google OAuth token exchange. Consent uses Google's system-browser page and a temporary loopback callback. No cloud AI, telemetry, analytics, or crash uploads exist. Proxies and redirects are disabled for application HTTP. Development additionally uses a loopback-only Vite server; built apps need no development server. Dependency installation is a separate development-time network operation.
 
-Native launch, fixture/encrypted-synthetic UI tests, SQLCipher, and a temporary macOS Keychain roundtrip have been verified on macOS ARM64. **Real Google consent/retrieval, Linux/Secret Service/Wayland, Windows, release packaging/signing, and manual visual/accessibility review remain unverified.**
+Native launch, fixture/encrypted-synthetic UI tests, SQLCipher, and a temporary macOS Keychain roundtrip have been verified on macOS ARM64. Browser consent and a bounded one-message live retrieval have also passed. **Full/incremental real-mail synchronization, live external attachment retrieval, Linux/Secret Service/Wayland, Windows, release packaging/signing, and manual visual/accessibility review remain unverified.**
 
 See [architecture and implementation status](docs/architecture.md) for boundaries, limitations, and upcoming local-only llama.cpp work.

@@ -4,6 +4,113 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::Notify;
 
+/// Explicit opt-in only. Never run this through a generic --include-ignored suite.
+/// Emits no account identifiers, message IDs, headers, bodies, JSON, or tokens.
+#[tokio::test]
+#[ignore = "Requires explicit approval: uses native credentials and downloads at most one real message"]
+async fn live_gmail_one_message() -> Result<(), String> {
+    if std::env::var("PITHMAIL_LIVE_CHECK").as_deref() != Ok("one-message") {
+        return Err("Live check requires the exact one-message opt-in.".into());
+    }
+    let path = PathBuf::from(
+        std::env::var_os("PITHMAIL_LIVE_MAILBOX_PATH")
+            .ok_or("Missing existing encrypted mailbox path.")?,
+    );
+    if !path.is_absolute() || !path.is_file() {
+        return Err("Live check requires an existing encrypted mailbox.".into());
+    }
+    // No worker is started, and fixtures must not be opened by this diagnostic.
+    let mailbox = Mailbox::new(PathBuf::new(), path.clone());
+    let services = mailbox.ensure_live().await?;
+    if !services.auth.connected().await? {
+        return Err("Complete browser sign-in first.".into());
+    }
+    let profile = services
+        .client
+        .profile()
+        .await
+        .map_err(|error| error.message)?;
+    mailbox
+        .with_store(move |store| store.set_account(&profile.email_address))
+        .await?;
+    println!("Live check: account identity accepted; synchronization paused.");
+    let page = services
+        .client
+        .list(None)
+        .await
+        .map_err(|error| error.message)?;
+    println!("Live check: first ID page retrieved; no further pages requested.");
+    let Some(first) = page.messages.into_iter().next() else {
+        println!("Live check: mailbox is empty; no message downloaded.");
+        return Ok(());
+    };
+    // Exactly one message invocation; no sync loop, history, labels, or attachment GETs.
+    let fetched = services
+        .client
+        .message(first.id)
+        .await
+        .map_err(|error| error.message)?;
+    let local_id = format!("gmail:{}", fetched.message.id);
+    let verify_id = local_id.clone();
+    mailbox
+        .with_store(move |store| {
+            let before: i64 = store
+                .connection
+                .query_row("SELECT count(*) FROM messages", [], |row| row.get(0))
+                .map_err(|_| "Cannot count local messages.")?;
+            store.put_gmail(&fetched)?;
+            let detail = store.message(&local_id)?;
+            if detail.message.id != local_id {
+                return Err("Stored message identity differs.".into());
+            }
+            let original: Vec<u8> = store
+                .connection
+                .query_row(
+                    "SELECT json FROM provider_messages WHERE message_id=?1",
+                    [&local_id],
+                    |row| row.get(0),
+                )
+                .map_err(|_| "Cannot verify preserved FULL JSON.")?;
+            if original != fetched.original_json {
+                return Err("Preserved FULL JSON differs.".into());
+            }
+            let after: i64 = store
+                .connection
+                .query_row("SELECT count(*) FROM messages", [], |row| row.get(0))
+                .map_err(|_| "Cannot count local messages.")?;
+            if after < before || after > before + 1 {
+                return Err("One-message retrieval exceeded its storage bound.".into());
+            }
+            if !sync::status(store)?.paused {
+                return Err("Synchronization must remain paused.".into());
+            }
+            Ok(())
+        })
+        .await?;
+    // Close and reopen only the database, while retaining the process's mailbox lock.
+    let key = tokio::task::spawn_blocking(|| database_key(&NativeSecrets::new()?, true))
+        .await
+        .map_err(|_| "Cannot access mailbox key.")??;
+    tokio::task::spawn_blocking(move || {
+        drop(
+            mailbox
+                .store
+                .lock()
+                .map_err(|_| "Mailbox unavailable.")?
+                .take(),
+        );
+        let store = Store::open_encrypted(&path, &key)?;
+        if store.message(&verify_id)?.message.id != verify_id || !sync::status(&store)?.paused {
+            return Err("Encrypted reopen or persisted pause check failed.".to_string());
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|_| "Cannot verify encrypted reopen.")??;
+    println!("Live check: one FULL message persisted, original JSON verified, encrypted reopen passed; sync stays paused. No external attachments requested.");
+    Ok(())
+}
+
 struct SwitchingProvider {
     account_b: AtomicBool,
     entered: Notify,
